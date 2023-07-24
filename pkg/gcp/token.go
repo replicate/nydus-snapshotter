@@ -54,48 +54,47 @@ func GetPassword() string {
 	return password
 }
 
-func handleErrorAndSleep(err error) {
-	log.L.Errorf("%v", err)
-	time.Sleep(5 * time.Second)
-}
-
 func runTokenRefreshLoop(ctx context.Context) {
 	client := &http.Client{}
-
 	for {
-		req, err := http.NewRequest("GET", "http://metadata.google.internal./computeMetadata/v1/instance/service-accounts/default/token", nil)
+		intervalInt, err := refreshPassword(ctx, client)
 		if err != nil {
-			handleErrorAndSleep(fmt.Errorf("Failed to create request: %v", err))
-			continue
+			log.L.Errorf("Failed to refresh password from GCP token: %w", err)
 		}
-		req.Header.Add("Metadata-Flavor", "Google")
-
-		resp, err := client.Do(req)
-		if err != nil {
-			handleErrorAndSleep(fmt.Errorf("Failed to send request: %v", err))
-			continue
+		refreshInterval := time.Duration(intervalInt) * time.Second
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(refreshInterval):
 		}
-
-		if resp.StatusCode != http.StatusOK {
-			handleErrorAndSleep(fmt.Errorf("Request returned status code %d", resp.StatusCode))
-			resp.Body.Close()
-			continue
-		}
-
-		var tok token
-		dec := json.NewDecoder(resp.Body)
-		if err := dec.Decode(&tok); err != nil {
-			handleErrorAndSleep(fmt.Errorf("Failed to decode response: %v", err))
-			resp.Body.Close()
-			continue
-		}
-		resp.Body.Close()
-
-		passwordMu.Lock()
-		password = tok.AccessToken
-		passwordMu.Unlock()
-
-		sleepDuration := time.Duration(tok.ExpiresIn) * time.Second
-		time.Sleep(sleepDuration)
 	}
+}
+
+func refreshPassword(ctx context.Context, client *http.Client) (int, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", "http://metadata.google.internal./computeMetadata/v1/instance/service-accounts/default/token", nil)
+	if err != nil {
+		return 5, fmt.Errorf("Failed to create request: %v", err)
+	}
+	req.Header.Add("Metadata-Flavor", "Google")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return 5, fmt.Errorf("Failed to send request: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return 5, fmt.Errorf("Request returned status code %d", resp.StatusCode)
+	}
+
+	var tok *token
+	dec := json.NewDecoder(resp.Body)
+	if err := dec.Decode(tok); err != nil {
+		return 5, fmt.Errorf("Failed to decode response: %v", err)
+	}
+
+	passwordMu.Lock()
+	defer passwordMu.Unlock()
+	password = tok.AccessToken
+	return tok.ExpiresIn, nil
 }
