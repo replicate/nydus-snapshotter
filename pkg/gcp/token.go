@@ -75,10 +75,10 @@ func runTokenRefreshLoop(ctx context.Context) {
 			handleErrorAndSleep(fmt.Errorf("Failed to send request: %v", err))
 			continue
 		}
-		defer resp.Body.Close()
 
 		if resp.StatusCode != http.StatusOK {
 			handleErrorAndSleep(fmt.Errorf("Request returned status code %d", resp.StatusCode))
+			resp.Body.Close()
 			continue
 		}
 
@@ -86,8 +86,10 @@ func runTokenRefreshLoop(ctx context.Context) {
 		dec := json.NewDecoder(resp.Body)
 		if err := dec.Decode(&tok); err != nil {
 			handleErrorAndSleep(fmt.Errorf("Failed to decode response: %v", err))
+			resp.Body.Close()
 			continue
 		}
+		resp.Body.Close()
 
 		passwordMu.Lock()
 		password = tok.AccessToken
