@@ -54,40 +54,46 @@ func GetPassword() string {
 	return password
 }
 
-func runTokenRefreshLoop(ctx context.Context) {
-	for {
-		if err := refreshPassword(ctx); err != nil {
-			log.L.Errorf("Failed to refresh password from GCP token: %w", err)
-		}
-		time.Sleep(5 * time.Second)
-	}
+func handleErrorAndSleep(err error) {
+	log.L.Errorf("%v", err)
+	time.Sleep(5 * time.Second)
 }
 
-func refreshPassword(ctx context.Context) error {
-	req, err := http.NewRequest("GET", "http://metadata.google.internal./computeMetadata/v1/instance/service-accounts/default/token", nil)
-	if err != nil {
-		return fmt.Errorf("Failed to create request: %v\n", err)
-	}
-	req.Header.Add("Metadata-Flavor", "Google")
+func runTokenRefreshLoop(ctx context.Context) {
 	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		return fmt.Errorf("Failed to send request: %v\n", err)
-	}
-	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("Request returned status code %d", resp.StatusCode)
-	}
+	for {
+		req, err := http.NewRequest("GET", "http://metadata.google.internal./computeMetadata/v1/instance/service-accounts/default/token", nil)
+		if err != nil {
+			handleErrorAndSleep(fmt.Errorf("Failed to create request: %v", err))
+			continue
+		}
+		req.Header.Add("Metadata-Flavor", "Google")
 
-	var tok *token
-	dec := json.NewDecoder(resp.Body)
-	if err := dec.Decode(tok); err != nil {
-		return fmt.Errorf("Failed to decode response: %v\n", err)
-	}
+		resp, err := client.Do(req)
+		if err != nil {
+			handleErrorAndSleep(fmt.Errorf("Failed to send request: %v", err))
+			continue
+		}
+		defer resp.Body.Close()
 
-	passwordMu.Lock()
-	defer passwordMu.Unlock()
-	password = tok.AccessToken
-	return nil
+		if resp.StatusCode != http.StatusOK {
+			handleErrorAndSleep(fmt.Errorf("Request returned status code %d", resp.StatusCode))
+			continue
+		}
+
+		var tok token
+		dec := json.NewDecoder(resp.Body)
+		if err := dec.Decode(&tok); err != nil {
+			handleErrorAndSleep(fmt.Errorf("Failed to decode response: %v", err))
+			continue
+		}
+
+		passwordMu.Lock()
+		password = tok.AccessToken
+		passwordMu.Unlock()
+
+		sleepDuration := time.Duration(tok.ExpiresIn) * time.Second
+		time.Sleep(sleepDuration)
+	}
 }
