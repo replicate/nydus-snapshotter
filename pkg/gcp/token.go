@@ -12,10 +12,17 @@ import (
 	"github.com/containerd/containerd/log"
 )
 
+const (
+	tokenURL                      = "http://metadata.google.internal./computeMetadata/v1/instance/service-accounts/default/token"
+	metadataFlavor                = "Google"
+	refreshInterval time.Duration = 5 * time.Second
+)
+
 var (
 	enabled    = false
 	password   string
 	passwordMu sync.Mutex
+	client     = &http.Client{}
 )
 
 type token struct {
@@ -35,13 +42,7 @@ func IsEnabled() bool {
 
 func HostIsGCP(host string) bool {
 	switch {
-	case host == "container.cloud.google.com":
-		return true
-	case host == "gcr.io":
-		return true
-	case strings.HasSuffix(host, ".gcr.io"):
-		return true
-	case strings.HasSuffix(host, ".pkg.dev"):
+	case host == "container.cloud.google.com", host == "gcr.io", strings.HasSuffix(host, ".gcr.io"), strings.HasSuffix(host, ".pkg.dev"):
 		return true
 	default:
 		return false
@@ -51,25 +52,31 @@ func HostIsGCP(host string) bool {
 func GetPassword() string {
 	passwordMu.Lock()
 	defer passwordMu.Unlock()
-	return password
+	return password // return a copy of password
 }
 
 func runTokenRefreshLoop(ctx context.Context) {
+	ticker := time.NewTicker(refreshInterval)
+	defer ticker.Stop()
+
 	for {
-		if err := refreshPassword(ctx); err != nil {
-			log.L.Errorf("Failed to refresh password from GCP token: %w", err)
+		select {
+		case <-ticker.C:
+			if err := refreshPassword(ctx); err != nil {
+				log.L.Errorf("Failed to refresh password from GCP token: %v", err)
+			}
+		case <-ctx.Done():
+			return
 		}
-		time.Sleep(5 * time.Second)
 	}
 }
 
 func refreshPassword(ctx context.Context) error {
-	req, err := http.NewRequest("GET", "http://metadata.google.internal./computeMetadata/v1/instance/service-accounts/default/token", nil)
+	req, err := http.NewRequest("GET", tokenURL, nil)
 	if err != nil {
 		return fmt.Errorf("Failed to create request: %v\n", err)
 	}
-	req.Header.Add("Metadata-Flavor", "Google")
-	client := &http.Client{}
+	req.Header.Add("Metadata-Flavor", metadataFlavor)
 	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("Failed to send request: %v\n", err)
@@ -80,14 +87,15 @@ func refreshPassword(ctx context.Context) error {
 		return fmt.Errorf("Request returned status code %d", resp.StatusCode)
 	}
 
-	var tok *token
+	var tok token
 	dec := json.NewDecoder(resp.Body)
-	if err := dec.Decode(tok); err != nil {
+	if err := dec.Decode(&tok); err != nil {
 		return fmt.Errorf("Failed to decode response: %v\n", err)
 	}
 
 	passwordMu.Lock()
-	defer passwordMu.Unlock()
 	password = tok.AccessToken
+	passwordMu.Unlock()
+
 	return nil
 }
