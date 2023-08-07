@@ -1,10 +1,10 @@
 FROM alpine:3.17.0 AS sourcer
 
-ARG NYDUS_VER=v2.1.5
+ARG NYDUS_VER=v2.2.3-replicate-test
 
 RUN apk add --no-cache curl
 RUN apk add --no-cache --upgrade grep
-RUN wget https://github.com/dragonflyoss/image-service/releases/download/$NYDUS_VER/nydus-static-$NYDUS_VER-linux-amd64.tgz && \
+RUN wget https://github.com/replicate/image-service/releases/download/$NYDUS_VER/nydus-static-$NYDUS_VER-linux-amd64.tgz && \
     echo $NYDUS_VER > /.nydus_version && \
     tar xzf nydus-static-$NYDUS_VER-linux-amd64.tgz && \
     rm nydus-static-$NYDUS_VER-linux-amd64.tgz
