@@ -48,12 +48,12 @@ func (r *Pool) Resolve(ref name.Reference, digest string, keychain authn.Keychai
 		ref.Context().RepositoryStr(),
 		digest)
 
-	if tr, ok := r.trPool.Get(ref.Name()); ok {
+	if tr, ok := r.trPool.Get(ref.Context().RegistryStr()); ok {
 		var err error
 		if url, err := redirect(endpointURL, tr.(http.RoundTripper)); err == nil {
 			return url, tr.(http.RoundTripper), nil
 		}
-		r.trPool.Remove(ref.Name())
+		r.trPool.Remove(ref.Context().RegistryStr())
 		log.L.Warnf("redirect %s, failed, err: %s", endpointURL, err)
 	}
 	tr, err := registry.AuthnTransport(ref, r.transport, keychain)
@@ -64,7 +64,7 @@ func (r *Pool) Resolve(ref name.Reference, digest string, keychain authn.Keychai
 	if err != nil {
 		return "", nil, errors.Wrapf(err, "failed to redirect %s", endpointURL)
 	}
-	r.trPool.Add(ref.Name(), tr)
+	r.trPool.Add(ref.Context().RegistryStr(), tr)
 	return url, tr, nil
 }
 
